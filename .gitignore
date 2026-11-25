@@ -1,0 +1,6 @@
+.env
+best.pt
+__pycache__
+.qodo
+config.py
+data/

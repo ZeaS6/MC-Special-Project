@@ -1,0 +1,294 @@
+"""
+main.py — โปรแกรมหลักสำหรับ CCTV + YOLOv11 + ByteTrack
+รันด้วยคำสั่ง: python main.py
+ต้องวาง main.py และ config.py ไว้ในโฟลเดอร์เดียวกัน
+"""
+import time
+import cv2
+from numpy.char import title
+from ultralytics import YOLO
+import config
+from line_notification import send_line_message
+from datetime import datetime
+
+def draw_detections_highest_confidence(result, frame):
+    
+    boxes = result.boxes
+
+    if boxes is None or len(boxes) == 0:
+        return frame
+
+    detections = []
+
+    # รวบรวมข้อมูล Detection
+    for box in boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+
+        confidence = float(box.conf[0])
+        class_id = int(box.cls[0])
+
+        class_name = result.names.get(class_id, str(class_id))
+
+        track_id = None
+        if box.id is not None:
+            track_id = int(box.id[0])
+
+        detections.append({
+            "coords": (x1, y1, x2, y2),
+            "confidence": confidence,
+            "class_name": class_name,
+            "track_id": track_id
+            })
+
+    # วาด Bounding Box ของทุกวัตถุ
+    for detection in detections:
+        x1, y1, x2, y2 = detection["coords"]
+        cv2.rectangle(
+            frame,
+            (x1, y1),
+            (x2, y2),
+            (0, 255, 0),
+            2
+        )
+
+    # เรียงลำดับ Confidence จากมากไปน้อย
+    detections.sort(
+        key=lambda item: item["confidence"],
+        reverse=True
+    )
+    displayed_labels = []
+
+    # วนแสดงป้าย Confidence
+    for detection in detections:
+        x1, y1, x2, y2 = detection["coords"]
+        confidence = detection["confidence"]
+        class_name = detection["class_name"]
+
+        label = f"{class_name} {confidence:.2f}"
+
+        if detection["track_id"] is not None:
+            label = f'ID:{detection["track_id"]} {label}'
+
+        (text_w, text_h), baseline = cv2.getTextSize(
+            label,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            2
+        )
+
+        # กำหนดตำแหน่งป้าย
+        label_x1 = max(
+            0,
+            min(x1, frame.shape[1] - text_w - 8)
+        )
+        label_y1 = y1 - text_h - baseline - 8
+
+        # หากพื้นที่ด้านบนไม่พอ ให้แสดงด้านล่าง
+        if label_y1 < 0:
+            label_y1 = min(
+                frame.shape[0] - text_h - baseline - 8,
+                y1 + 3
+            )
+
+        label_x2 = label_x1 + text_w + 8
+        label_y2 = label_y1 + text_h + baseline + 8
+
+        current_rect = (
+            label_x1,
+            label_y1,
+            label_x2,
+            label_y2
+        )
+
+        # ตรวจสอบว่าป้ายข้อความทับซ้อนกันหรือไม่
+        overlap = any(
+            current_rect[0] < old[2]
+            and current_rect[2] > old[0]
+            and current_rect[1] < old[3]
+            and current_rect[3] > old[1]
+            for old in displayed_labels
+        )
+
+        # หากทับซ้อน ให้ข้ามป้ายที่มี Confidence ต่ำกว่า
+        if overlap:
+            continue
+
+        displayed_labels.append(current_rect)
+
+        # วาดพื้นหลังป้าย
+        cv2.rectangle(
+            frame,
+            (label_x1, label_y1),
+            (label_x2, label_y2),
+            (0, 255, 0),
+            -1
+        )
+
+        # แสดงข้อความ Confidence
+        cv2.putText(
+            frame,
+            label,
+            (label_x1 + 4, label_y2 - baseline - 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 0, 0),
+            2,
+            cv2.LINE_AA
+        )
+
+    return frame
+
+def load_model():
+    print("กำลังตรวจสอบไฟล์โมเดล...")
+    print(f"Model path: {config.MODEL_PATH}")
+    if not config.MODEL_PATH.is_file():
+        raise FileNotFoundError(
+            f"ไม่พบไฟล์ best.pt ที่: {config.MODEL_PATH}\n"
+            "กรุณาตรวจสอบ MODEL_PATH ใน config.py"
+        )
+    model = YOLO(str(config.MODEL_PATH))
+    print("โหลดโมเดลสำเร็จ:", model.names)
+    return model
+
+
+def connect_camera():
+    print("กำลังเชื่อมต่อกล้อง CCTV...")
+    print(f"Camera: {config.CCTV_IP}:{config.CCTV_PORT}, "
+          f"Channel: {config.CCTV_CHANNEL}")
+    cap = cv2.VideoCapture(config.RTSP_URL, cv2.CAP_FFMPEG)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    if not cap.isOpened():
+        cap.release()
+        raise ConnectionError(
+            "เชื่อมต่อกล้องไม่สำเร็จ กรุณาตรวจสอบ IP, username, "
+            "password, RTSP port, channel และเครือข่าย"
+        )
+    return cap
+
+
+def main():
+    model = YOLO(str(config.MODEL_PATH), task="detect")
+    print("\n========== YOLO MODEL CLASSES ==========")
+    for class_id, class_name in model.names.items():
+        print(f"Class ID: {class_id} | Class Name: {class_name}")
+    print("========================================\n")
+    
+    last_alert_time = {}
+    alert_interval = 120
+    
+    cap = cv2.VideoCapture(config.RTSP_URL)
+    send_line_message("ทดสอบการเชื่อมต่อ LINE จากระบบ AI Surveillance")
+    
+    fps = cap.get(cv2.CAP_PROP_FPS) or 20.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"เชื่อมต่อสำเร็จ: {width}x{height}, FPS: {fps:.1f}")
+    print(f"ปรับภาพเป็น {config.RESIZE_WIDTH}x{config.RESIZE_HEIGHT}")
+    print(f"Confidence threshold = {config.CONF_THRESHOLD}")
+    print("กด q เพื่อหยุดโปรแกรม")
+
+    # writer = None
+    # if config.SAVE_OUTPUT:
+    #     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    #     frame_skip = max(1, int(config.SKIP_FRAMES))
+    #     writer = cv2.VideoWriter(
+    #         str(config.OUTPUT_VIDEO_PATH), fourcc, fps,
+    #         (config.RESIZE_WIDTH, config.RESIZE_HEIGHT)
+    #     )
+    #     if not writer.isOpened():
+    #         writer.release()
+    #         writer = None
+    #         print("คำเตือน: ไม่สามารถสร้างไฟล์วิดีโอผลลัพธ์ได้")
+
+    frame_idx = 0
+    prev_time = time.time()
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("อ่านเฟรมไม่ได้ กำลังลองเชื่อมต่อใหม่...")
+                cap.release()
+                time.sleep(1)
+                cap = cv2.VideoCapture(config.RTSP_URL, cv2.CAP_FFMPEG)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if not cap.isOpened():
+                    print("ยังเชื่อมต่อกล้องไม่ได้ จะลองใหม่")
+                    time.sleep(2)
+                continue
+
+            frame_idx += 1
+            if config.SKIP_FRAMES > 1 and frame_idx % config.SKIP_FRAMES != 0:
+                continue
+
+            frame = cv2.resize(
+                frame, (config.RESIZE_WIDTH, config.RESIZE_HEIGHT),
+                interpolation=cv2.INTER_AREA
+            )
+
+            results = model.track(
+                source=frame,
+                tracker=config.TRACKER_CONFIG,
+                persist=True,
+                conf=config.CONF_THRESHOLD,
+                verbose=False
+            )
+            
+            result = results[0]
+
+            
+            if result.boxes is not None:
+                for box in result.boxes:
+                    class_id = int(box.cls[0])
+                    confidence = float(box.conf[0])
+                    class_name = result.names[class_id]
+
+                #ตรวจสอบเฉพาะพฤติกรรมที่ต้องสงสัย
+                    if class_name in ['Suspicious', 'rob', 'stealing']:
+                        current_time = time.time()
+                        last_time = last_alert_time.get(class_name, 0)
+                        
+                        if current_time - last_time >= alert_interval:
+                            alert_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                            message = (
+                                "ระบบตรวจพบพฤติกรรมต้องสงสัย: "
+                                f"{class_name}\n"
+                                f"ความมั่นใจ: {confidence:.2f}\n"
+                                f"เวลา: {alert_time}"
+                            )
+                            image_path = "alert_image.jpg"  # กำหนด path ของภาพที่ต้องการส่ง
+                            cv2.imwrite(image_path, frame)  # บันทึกภาพจากกล้องเป็นไฟล์
+                            send_line_message(message, image_path=image_path)
+                            last_alert_time[class_name] = current_time
+                    
+            annotated = results[0].plot()
+
+            now = time.time()
+            actual_fps = 1.0 / (now - prev_time) if now > prev_time else 0.0
+            prev_time = now
+            cv2.putText(
+                annotated, f"FPS: {actual_fps:.1f}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
+            )
+
+            # if writer is not None:
+            #     writer.write(annotated)
+
+            if config.SHOW_WINDOW:
+                cv2.imshow(config.WINDOW_NAME, annotated)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    print("หยุดการทำงาน")
+                    break
+
+    except KeyboardInterrupt:
+        print("หยุดโปรแกรมด้วย Ctrl+C")
+    finally:
+        cap.release()
+        # if writer is not None:
+        #     writer.release()
+        #     print(f"บันทึกวิดีโอที่: {config.OUTPUT_VIDEO_PATH}")
+        # cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
