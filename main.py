@@ -5,138 +5,139 @@ main.py — โปรแกรมหลักสำหรับ CCTV + YOLOv11 +
 """
 import time
 import cv2
-from numpy.char import title
+# from numpy.char import title
 from ultralytics import YOLO
 import config
 from line_notification import send_line_message
 from datetime import datetime
+from draw_detections import draw_detections_highest_confidence
 
-def draw_detections_highest_confidence(result, frame):
+# def draw_detections_highest_confidence(result, frame):
     
-    boxes = result.boxes
+#     boxes = result.boxes
 
-    if boxes is None or len(boxes) == 0:
-        return frame
+#     if boxes is None or len(boxes) == 0:
+#         return frame
 
-    detections = []
+#     detections = []
 
-    # รวบรวมข้อมูล Detection
-    for box in boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+#     # รวบรวมข้อมูล Detection
+#     for box in boxes:
+#         x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
 
-        confidence = float(box.conf[0])
-        class_id = int(box.cls[0])
+#         confidence = float(box.conf[0])
+#         class_id = int(box.cls[0])
 
-        class_name = result.names.get(class_id, str(class_id))
+#         class_name = result.names.get(class_id, str(class_id))
 
-        track_id = None
-        if box.id is not None:
-            track_id = int(box.id[0])
+#         track_id = None
+#         if box.id is not None:
+#             track_id = int(box.id[0])
 
-        detections.append({
-            "coords": (x1, y1, x2, y2),
-            "confidence": confidence,
-            "class_name": class_name,
-            "track_id": track_id
-            })
+#         detections.append({
+#             "coords": (x1, y1, x2, y2),
+#             "confidence": confidence,
+#             "class_name": class_name,
+#             "track_id": track_id
+#             })
 
-    # วาด Bounding Box ของทุกวัตถุ
-    for detection in detections:
-        x1, y1, x2, y2 = detection["coords"]
-        cv2.rectangle(
-            frame,
-            (x1, y1),
-            (x2, y2),
-            (0, 255, 0),
-            2
-        )
+#     # วาด Bounding Box ของทุกวัตถุ
+#     for detection in detections:
+#         x1, y1, x2, y2 = detection["coords"]
+#         cv2.rectangle(
+#             frame,
+#             (x1, y1),
+#             (x2, y2),
+#             (0, 255, 0),
+#             2
+#         )
 
-    # เรียงลำดับ Confidence จากมากไปน้อย
-    detections.sort(
-        key=lambda item: item["confidence"],
-        reverse=True
-    )
-    displayed_labels = []
+#     # เรียงลำดับ Confidence จากมากไปน้อย
+#     detections.sort(
+#         key=lambda item: item["confidence"],
+#         reverse=True
+#     )
+#     displayed_labels = []
 
-    # วนแสดงป้าย Confidence
-    for detection in detections:
-        x1, y1, x2, y2 = detection["coords"]
-        confidence = detection["confidence"]
-        class_name = detection["class_name"]
+#     # วนแสดงป้าย Confidence
+#     for detection in detections:
+#         x1, y1, x2, y2 = detection["coords"]
+#         confidence = detection["confidence"]
+#         class_name = detection["class_name"]
 
-        label = f"{class_name} {confidence:.2f}"
+#         label = f"{class_name} {confidence:.2f}"
 
-        if detection["track_id"] is not None:
-            label = f'ID:{detection["track_id"]} {label}'
+#         if detection["track_id"] is not None:
+#             label = f'ID:{detection["track_id"]} {label}'
 
-        (text_w, text_h), baseline = cv2.getTextSize(
-            label,
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            2
-        )
+#         (text_w, text_h), baseline = cv2.getTextSize(
+#             label,
+#             cv2.FONT_HERSHEY_SIMPLEX,
+#             0.55,
+#             2
+#         )
 
-        # กำหนดตำแหน่งป้าย
-        label_x1 = max(
-            0,
-            min(x1, frame.shape[1] - text_w - 8)
-        )
-        label_y1 = y1 - text_h - baseline - 8
+#         # กำหนดตำแหน่งป้าย
+#         label_x1 = max(
+#             0,
+#             min(x1, frame.shape[1] - text_w - 8)
+#         )
+#         label_y1 = y1 - text_h - baseline - 8
 
-        # หากพื้นที่ด้านบนไม่พอ ให้แสดงด้านล่าง
-        if label_y1 < 0:
-            label_y1 = min(
-                frame.shape[0] - text_h - baseline - 8,
-                y1 + 3
-            )
+#         # หากพื้นที่ด้านบนไม่พอ ให้แสดงด้านล่าง
+#         if label_y1 < 0:
+#             label_y1 = min(
+#                 frame.shape[0] - text_h - baseline - 8,
+#                 y1 + 3
+#             )
 
-        label_x2 = label_x1 + text_w + 8
-        label_y2 = label_y1 + text_h + baseline + 8
+#         label_x2 = label_x1 + text_w + 8
+#         label_y2 = label_y1 + text_h + baseline + 8
 
-        current_rect = (
-            label_x1,
-            label_y1,
-            label_x2,
-            label_y2
-        )
+#         current_rect = (
+#             label_x1,
+#             label_y1,
+#             label_x2,
+#             label_y2
+#         )
 
-        # ตรวจสอบว่าป้ายข้อความทับซ้อนกันหรือไม่
-        overlap = any(
-            current_rect[0] < old[2]
-            and current_rect[2] > old[0]
-            and current_rect[1] < old[3]
-            and current_rect[3] > old[1]
-            for old in displayed_labels
-        )
+#         # ตรวจสอบว่าป้ายข้อความทับซ้อนกันหรือไม่
+#         overlap = any(
+#             current_rect[0] < old[2]
+#             and current_rect[2] > old[0]
+#             and current_rect[1] < old[3]
+#             and current_rect[3] > old[1]
+#             for old in displayed_labels
+#         )
 
-        # หากทับซ้อน ให้ข้ามป้ายที่มี Confidence ต่ำกว่า
-        if overlap:
-            continue
+#         # หากทับซ้อน ให้ข้ามป้ายที่มี Confidence ต่ำกว่า
+#         if overlap:
+#             continue
 
-        displayed_labels.append(current_rect)
+#         displayed_labels.append(current_rect)
 
-        # วาดพื้นหลังป้าย
-        cv2.rectangle(
-            frame,
-            (label_x1, label_y1),
-            (label_x2, label_y2),
-            (0, 255, 0),
-            -1
-        )
+#         # วาดพื้นหลังป้าย
+#         cv2.rectangle(
+#             frame,
+#             (label_x1, label_y1),
+#             (label_x2, label_y2),
+#             (0, 255, 0),
+#             -1
+#         )
 
-        # แสดงข้อความ Confidence
-        cv2.putText(
-            frame,
-            label,
-            (label_x1 + 4, label_y2 - baseline - 4),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 0, 0),
-            2,
-            cv2.LINE_AA
-        )
+#         # แสดงข้อความ Confidence
+#         cv2.putText(
+#             frame,
+#             label,
+#             (label_x1 + 4, label_y2 - baseline - 4),
+#             cv2.FONT_HERSHEY_SIMPLEX,
+#             0.55,
+#             (0, 0, 0),
+#             2,
+#             cv2.LINE_AA
+#         )
 
-    return frame
+#     return frame
 
 def load_model():
     print("กำลังตรวจสอบไฟล์โมเดล...")
@@ -261,7 +262,7 @@ def main():
                             send_line_message(message, image_path=image_path)
                             last_alert_time[class_name] = current_time
                     
-            annotated = results[0].plot()
+            annotated = draw_detections_highest_confidence(results[0], frame.copy())
 
             now = time.time()
             actual_fps = 1.0 / (now - prev_time) if now > prev_time else 0.0
