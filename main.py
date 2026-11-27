@@ -13,7 +13,7 @@ from datetime import datetime
 from draw_detections import draw_detections_highest_confidence
 
 
-def load_model():
+def load_model() -> YOLO:
     print("กำลังตรวจสอบไฟล์โมเดล...")
     print(f"Model path: {config.MODEL_PATH}")
     if not config.MODEL_PATH.is_file():
@@ -26,7 +26,7 @@ def load_model():
     return model
 
 
-def connect_camera():
+def connect_camera() -> cv2.VideoCapture:
     print("กำลังเชื่อมต่อกล้อง CCTV...")
     print(f"Camera: {config.CCTV_IP}:{config.CCTV_PORT}, "
           f"Channel: {config.CCTV_CHANNEL}")
@@ -41,7 +41,7 @@ def connect_camera():
     return cap
 
 
-def main():
+def main() -> None:
     model = YOLO(str(config.MODEL_PATH), task="detect")
     print("\n========== YOLO MODEL CLASSES ==========")
     for class_id, class_name in model.names.items():

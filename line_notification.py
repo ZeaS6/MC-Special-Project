@@ -7,7 +7,7 @@ from config import CHANNEL_ACCESS_TOKEN, USER_ID, LINE_API_URL
 # Function: Send LINE Message
 # ==============================
 
-def send_line_message(message, image_path=None):
+def send_line_message(message: str, image_path: str | None = None) -> None:
 
     headers = {
         "Content-Type": "application/json",
@@ -73,7 +73,7 @@ def send_line_message(message, image_path=None):
 
 if __name__ == "__main__":
 
-    message = """
+    message: str = """
     AI SURVEILLANCE SYSTEM
 
     ระบบแจ้งเตือนพฤติกรรมต้องสงสัย
